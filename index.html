@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>RPS Mobile P2P</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800&display=swap');
+
+        :root {
+            --accent-blue: #60a5fa;
+            --accent-rose: #fb7185;
+            --safe-top: env(safe-area-inset-top);
+            --safe-bottom: env(safe-area-inset-bottom);
+        }
+
+        body {
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            background: #0f172a;
+            color: white;
+            overscroll-behavior: none;
+            height: 100vh;
+            width: 100vw;
+            overflow: hidden;
+        }
+
+        .app-container {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            padding-top: var(--safe-top);
+            padding-bottom: var(--safe-bottom);
+        }
+
+        .glass {
+            background: rgba(255, 255, 255, 0.03);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .blob {
+            position: absolute;
+            width: 80vw;
+            height: 80vw;
+            background: radial-gradient(circle, rgba(59, 130, 246, 0.1) 0%, transparent 70%);
+            z-index: -1;
+            filter: blur(40px);
+        }
+
+        /* Hand Animations */
+        .hand-shake { animation: rhythmicShake 0.4s ease-in-out infinite; }
+        @keyframes rhythmicShake {
+            0%, 100% { transform: translateY(0) rotate(0); }
+            50% { transform: translateY(-20px) rotate(-5deg); }
+        }
+
+        .winner-pop { animation: winnerReveal 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) forwards; }
+        @keyframes winnerReveal {
+            0% { transform: scale(0.5); filter: brightness(2) drop-shadow(0 0 0px var(--accent-blue)); }
+            100% { transform: scale(1.3); filter: brightness(1.2) drop-shadow(0 0 20px var(--accent-blue)); }
+        }
+
+        .loser-shrink { animation: loserShrink 0.6s ease forwards; }
+        @keyframes loserShrink {
+            0% { transform: scale(1); opacity: 1; }
+            100% { transform: scale(0.8); opacity: 0.4; filter: grayscale(1); }
+        }
+
+        .result-spring { animation: springIn 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
+        @keyframes springIn {
+            0% { transform: scale(0.3); opacity: 0; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+
+        .container-shake { animation: tiltShake 0.3s linear; }
+        @keyframes tiltShake {
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-8px); }
+            75% { transform: translateX(8px); }
+        }
+
+        .score-pop { animation: scoreUpdate 0.4s ease-out; }
+        @keyframes scoreUpdate {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.5); color: #fff; }
+            100% { transform: scale(1); }
+        }
+
+        /* Particles */
+        .particle {
+            position: absolute;
+            pointer-events: none;
+            z-index: 50;
+            border-radius: 2px;
+            animation: particle-fly 1s ease-out forwards;
+        }
+        @keyframes particle-fly {
+            0% { transform: translate(0, 0) rotate(0deg); opacity: 1; }
+            100% { transform: translate(var(--tx), var(--ty)) rotate(360deg); opacity: 0; }
+        }
+
+        /* Full screen outcome flash */
+        .flash-overlay {
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            z-index: 5;
+            opacity: 0;
+            transition: opacity 0.1s;
+        }
+
+        button {
+            -webkit-tap-highlight-color: transparent;
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        button:active:not(:disabled) { transform: scale(0.92); opacity: 0.8; }
+        
+        .emoji-v-large {
+            font-size: 6rem;
+            transition: all 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            filter: drop-shadow(0 15px 25px rgba(0,0,0,0.4));
+        }
+
+        .bottom-sheet {
+            transform: translateY(100%);
+            transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .bottom-sheet.open { transform: translateY(0); }
+    </style>
+</head>
+<body class="relative">
+
+    <div class="flash-overlay" id="flash-bg"></div>
+    <div class="blob top-[-10%] left-[-10%]"></div>
+    <div class="blob bottom-[10%] right-[-10%]" style="background: radial-gradient(circle, rgba(244, 63, 94, 0.1) 0%, transparent 70%);"></div>
+
+    <div class="app-container">
+        
+        <!-- Top Navigation -->
+        <header class="p-4 flex gap-2 z-10">
+            <button onclick="setMode('local')" id="btn-local" class="flex-1 py-3 rounded-2xl glass text-[10px] font-bold tracking-widest uppercase border border-white/10 opacity-50 [&.active]:opacity-100 [&.active]:border-blue-500/50 active">Local</button>
+            <button onclick="setMode('online')" id="btn-online" class="flex-1 py-3 rounded-2xl glass text-[10px] font-bold tracking-widest uppercase border border-white/10 opacity-50 [&.active]:opacity-100 [&.active]:border-blue-500/50">Online</button>
+        </header>
+
+        <!-- Scoreboard -->
+        <div class="px-6 py-4 flex justify-between items-center">
+            <div class="text-left">
+                <span class="text-[9px] font-bold tracking-[0.3em] text-blue-400 uppercase">You</span>
+                <div id="player-score" class="text-4xl font-black">0</div>
+            </div>
+            <div class="flex flex-col items-center">
+                <div class="px-3 py-1 bg-white/5 rounded-full text-[9px] font-bold tracking-widest text-slate-500 mb-1">VS</div>
+                <div id="round-display" class="text-[10px] text-white/50 font-bold uppercase tracking-tight">Round 1</div>
+            </div>
+            <div class="text-right">
+                <span id="p2-label" class="text-[9px] font-bold tracking-[0.3em] text-rose-400 uppercase">CPU</span>
+                <div id="cpu-score" class="text-4xl font-black">0</div>
+            </div>
+        </div>
+
+        <!-- Main Arena -->
+        <main id="arena" class="flex-1 flex flex-col items-center justify-center p-6 relative">
+            <div id="status-message" class="absolute top-0 text-[10px] font-extrabold text-slate-500 tracking-[0.4em] uppercase">Ready?</div>
+
+            <div class="flex justify-between items-center w-full mb-12 relative">
+                <!-- Particle Anchor Player -->
+                <div id="p1-anchor" class="flex-1 flex flex-col items-center">
+                    <div id="player-hand" class="emoji-v-large select-none">🤜</div>
+                </div>
+
+                <!-- Particle Anchor CPU -->
+                <div id="p2-anchor" class="flex-1 flex flex-col items-center">
+                    <div id="cpu-hand" class="emoji-v-large select-none">🤛</div>
+                </div>
+            </div>
+
+            <div id="result-text" class="text-3xl font-black uppercase text-center tracking-tighter h-10">
+                Pick A Move
+            </div>
+        </main>
+
+        <!-- Bottom Controls -->
+        <footer class="p-6 pb-10 space-y-6">
+            <div class="grid grid-cols-3 gap-4" id="controls">
+                <button onclick="handleInput('stone')" class="flex flex-col items-center justify-center bg-white/5 border border-white/10 aspect-square rounded-[2rem] hover:bg-white/10">
+                    <span class="text-4xl mb-1">🪨</span>
+                    <span class="text-[9px] font-black text-slate-400">STONE</span>
+                </button>
+                <button onclick="handleInput('paper')" class="flex flex-col items-center justify-center bg-white/5 border border-white/10 aspect-square rounded-[2rem] hover:bg-white/10">
+                    <span class="text-4xl mb-1">📄</span>
+                    <span class="text-[9px] font-black text-slate-400">PAPER</span>
+                </button>
+                <button onclick="handleInput('scissors')" class="flex flex-col items-center justify-center bg-white/5 border border-white/10 aspect-square rounded-[2rem] hover:bg-white/10">
+                    <span class="text-4xl mb-1">✂️</span>
+                    <span class="text-[9px] font-black text-slate-400">SCISSORS</span>
+                </button>
+            </div>
+            
+            <button onclick="resetGameState()" class="w-full text-[10px] font-bold tracking-widest text-slate-600 uppercase">Reset match</button>
+        </footer>
+    </div>
+
+    <!-- 8-Digit Room Code Bottom Sheet -->
+    <div id="connection-overlay" class="fixed inset-0 bg-black/60 opacity-0 pointer-events-none transition-opacity duration-300 z-40" onclick="toggleBottomSheet(false)"></div>
+    <div id="connection-sheet" class="fixed bottom-0 left-0 right-0 glass rounded-t-[3rem] p-8 z-50 bottom-sheet border-t border-white/10">
+        <div class="w-12 h-1.5 bg-white/20 rounded-full mx-auto mb-6"></div>
+        <h2 class="text-lg font-black uppercase tracking-tight mb-2">Multiplayer</h2>
+        <p class="text-[9px] text-slate-400 uppercase tracking-widest mb-6">Connect using an 8-digit code</p>
+        
+        <div id="setup-view" class="space-y-5">
+            <button onclick="createRoom()" id="host-btn" class="w-full py-4 rounded-2xl bg-blue-600 text-[11px] font-black uppercase tracking-widest shadow-lg shadow-blue-900/20">
+                Create Room
+            </button>
+            <div class="flex items-center gap-3 px-2">
+                <div class="flex-1 h-px bg-white/10"></div>
+                <span class="text-[8px] font-bold text-slate-500 uppercase tracking-[0.2em]">OR</span>
+                <div class="flex-1 h-px bg-white/10"></div>
+            </div>
+            <div class="flex gap-3">
+                <input type="number" id="room-input" placeholder="8-DIGIT CODE" class="flex-1 bg-white/5 border border-white/10 rounded-2xl px-4 py-4 text-[11px] font-black tracking-widest focus:outline-none focus:border-blue-500 appearance-none">
+                <button onclick="joinRoom()" class="bg-white/10 px-8 rounded-2xl text-[10px] font-black uppercase whitespace-nowrap">
+                    Join
+                </button>
+            </div>
+            <div id="room-info" class="hidden text-center p-6 bg-white/5 rounded-[2rem] border border-blue-500/20">
+                <p class="text-[9px] text-slate-500 font-bold uppercase tracking-widest mb-2">Your Room Code</p>
+                <p id="display-code" class="text-4xl font-black tracking-[0.4em] text-blue-400 animate-pulse">00000000</p>
+            </div>
+        </div>
+        <p id="connection-status" class="mt-8 text-[9px] text-center font-bold text-slate-500 uppercase tracking-widest">Server: Ready</p>
+    </div>
+
+    <!-- Toast Notification -->
+    <div id="toast" class="fixed top-12 left-1/2 -translate-x-1/2 px-6 py-3 rounded-full text-[11px] font-black uppercase shadow-2xl transition-all transform -translate-y-20 opacity-0 pointer-events-none z-[100]">
+        Notification
+    </div>
+
+    <script>
+        let playerScore = 0, cpuScore = 0, round = 1;
+        let isProcessing = false, mode = 'local';
+        let p1Choice = null, p2Choice = null;
+
+        let peer, connection;
+        const emojiMap = { stone: '🪨', paper: '📄', scissors: '✂️', p1_wait: '🤜', p2_wait: '🤛' };
+        const winRules = { stone: 'scissors', paper: 'stone', scissors: 'paper' };
+
+        const p1ScoreEl = document.getElementById('player-score'), p2ScoreEl = document.getElementById('cpu-score');
+        const roundEl = document.getElementById('round-display'), statusMsg = document.getElementById('status-message');
+        const resultText = document.getElementById('result-text'), p1Hand = document.getElementById('player-hand'), p2Hand = document.getElementById('cpu-hand');
+        const flashBg = document.getElementById('flash-bg');
+
+        function toggleBottomSheet(open) {
+            document.getElementById('connection-sheet').classList.toggle('open', open);
+            document.getElementById('connection-overlay').classList.toggle('opacity-0', !open);
+            document.getElementById('connection-overlay').classList.toggle('pointer-events-none', !open);
+        }
+
+        function setMode(m) {
+            mode = m;
+            document.getElementById('btn-local').classList.toggle('active', m === 'local');
+            document.getElementById('btn-online').classList.toggle('active', m === 'online');
+            document.getElementById('p2-label').textContent = m === 'local' ? 'CPU' : 'Rival';
+            if (m === 'online') toggleBottomSheet(true);
+            resetGameState();
+        }
+
+        function initPeer(id = null) {
+            if (peer) peer.destroy();
+            peer = id ? new Peer(id) : new Peer();
+            peer.on('open', (newId) => {
+                if (mode === 'online') {
+                    document.getElementById('display-code').textContent = newId;
+                    document.getElementById('connection-status').textContent = "Waiting for rival...";
+                }
+            });
+            peer.on('connection', (conn) => { connection = conn; setupConnection(); });
+            peer.on('error', (err) => {
+                if (err.type === 'unavailable-id') showToast("Room busy, try again", 'lose');
+                else showToast("Connection failed", 'lose');
+            });
+        }
+
+        function setupConnection() {
+            connection.on('open', () => {
+                showToast("Battle Ready!", 'win');
+                document.getElementById('connection-status').textContent = "CONNECTED";
+                setTimeout(() => toggleBottomSheet(false), 1000);
+            });
+            connection.on('data', (data) => {
+                if (data.type === 'move') { p2Choice = data.move; syncReveal(); }
+            });
+            connection.on('close', () => { showToast("Rival disconnected", 'lose'); setMode('local'); });
+        }
+
+        window.createRoom = () => {
+            const randomCode = Math.floor(10000000 + Math.random() * 90000000).toString();
+            document.getElementById('room-info').classList.remove('hidden');
+            initPeer(randomCode);
+        };
+
+        window.joinRoom = () => {
+            const code = document.getElementById('room-input').value.trim();
+            if (code.length !== 8) return showToast("Enter 8 digits", 'lose');
+            initPeer();
+            peer.on('open', () => { connection = peer.connect(code); setupConnection(); });
+        };
+
+        window.handleInput = (choice) => {
+            if (isProcessing) return;
+            if (mode === 'local') runLocal(choice);
+            else {
+                if (!connection || !connection.open) return showToast("No connection", 'lose');
+                p1Choice = choice;
+                connection.send({ type: 'move', move: choice });
+                resultText.textContent = "WAITING...";
+                syncReveal();
+            }
+        };
+
+        function syncReveal() { if (p1Choice && p2Choice) runReveal(p1Choice, p2Choice); }
+
+        async function runLocal(pMove) {
+            isProcessing = true;
+            const choices = ['stone', 'paper', 'scissors'];
+            const cMove = choices[Math.floor(Math.random() * 3)];
+            await runReveal(pMove, cMove);
+            isProcessing = false;
+        }
+
+        function createParticles(x, y, color) {
+            for (let i = 0; i < 20; i++) {
+                const p = document.createElement('div');
+                p.className = 'particle';
+                const size = Math.random() * 8 + 4;
+                p.style.width = `${size}px`;
+                p.style.height = `${size}px`;
+                p.style.backgroundColor = color;
+                p.style.left = `${x}px`;
+                p.style.top = `${y}px`;
+                
+                const angle = Math.random() * Math.PI * 2;
+                const dist = Math.random() * 150 + 50;
+                p.style.setProperty('--tx', `${Math.cos(angle) * dist}px`);
+                p.style.setProperty('--ty', `${Math.sin(angle) * dist}px`);
+                
+                document.body.appendChild(p);
+                setTimeout(() => p.remove(), 1000);
+            }
+        }
+
+        async function runReveal(m1, m2) {
+            isProcessing = true;
+            
+            // Initial Shaking State
+            p1Hand.className = 'emoji-v-large flex-1 text-center hand-shake';
+            p2Hand.className = 'emoji-v-large flex-1 text-center hand-shake';
+            p1Hand.textContent = emojiMap.p1_wait;
+            p2Hand.textContent = emojiMap.p2_wait;
+            resultText.classList.remove('result-spring');
+
+            for (const step of ["READY", "SET", "GO!"]) {
+                statusMsg.textContent = step;
+                await new Promise(r => setTimeout(r, 400));
+            }
+
+            p1Hand.classList.remove('hand-shake');
+            p2Hand.classList.remove('hand-shake');
+            document.getElementById('arena').classList.add('container-shake');
+
+            p1Hand.textContent = emojiMap[m1];
+            p2Hand.textContent = emojiMap[m2];
+            
+            // Result Logic
+            let winner = 0; // 0: Draw, 1: Player, 2: CPU
+            if (m1 !== m2) {
+                winner = (winRules[m1] === m2) ? 1 : 2;
+            }
+
+            // Visual Effects Sequence
+            if (winner === 1) {
+                p1Hand.className = 'emoji-v-large flex-1 text-center winner-pop';
+                p2Hand.className = 'emoji-v-large flex-1 text-center loser-shrink';
+                playerScore++;
+                resultText.textContent = "VICTORY";
+                resultText.style.color = "#60a5fa";
+                p1ScoreEl.textContent = playerScore;
+                p1ScoreEl.classList.add('score-pop');
+                
+                // Flash & Particles
+                flashBg.style.backgroundColor = "rgba(59, 130, 246, 0.4)";
+                flashBg.style.opacity = "1";
+                const rect = p1Hand.getBoundingClientRect();
+                createParticles(rect.left + rect.width/2, rect.top + rect.height/2, "#60a5fa");
+            } else if (winner === 2) {
+                p1Hand.className = 'emoji-v-large flex-1 text-center loser-shrink';
+                p2Hand.className = 'emoji-v-large flex-1 text-center winner-pop';
+                cpuScore++;
+                resultText.textContent = "DEFEAT";
+                resultText.style.color = "#fb7185";
+                p2ScoreEl.textContent = cpuScore;
+                p2ScoreEl.classList.add('score-pop');
+                
+                flashBg.style.backgroundColor = "rgba(244, 63, 94, 0.4)";
+                flashBg.style.opacity = "1";
+                const rect = p2Hand.getBoundingClientRect();
+                createParticles(rect.left + rect.width/2, rect.top + rect.height/2, "#fb7185");
+            } else {
+                p1Hand.className = 'emoji-v-large flex-1 text-center';
+                p2Hand.className = 'emoji-v-large flex-1 text-center';
+                resultText.textContent = "DRAW";
+                resultText.style.color = "#94a3b8";
+                flashBg.style.backgroundColor = "rgba(148, 163, 184, 0.2)";
+                flashBg.style.opacity = "1";
+            }
+
+            resultText.classList.add('result-spring');
+            round++;
+            roundEl.textContent = `Round ${round}`;
+            
+            setTimeout(() => {
+                flashBg.style.opacity = "0";
+                document.getElementById('arena').classList.remove('container-shake');
+                p1ScoreEl.classList.remove('score-pop');
+                p2ScoreEl.classList.remove('score-pop');
+                p1Choice = null;
+                p2Choice = null;
+                isProcessing = false;
+            }, 1000);
+        }
+
+        function resetGameState() {
+            playerScore = 0; cpuScore = 0; round = 1;
+            p1ScoreEl.textContent = '0'; p2ScoreEl.textContent = '0'; roundEl.textContent = 'Round 1';
+            resultText.textContent = "Pick A Move"; resultText.style.color = "#fff"; statusMsg.textContent = "Ready?";
+            resultText.classList.remove('result-spring');
+            p1Hand.className = 'emoji-v-large flex-1 text-center';
+            p2Hand.className = 'emoji-v-large flex-1 text-center';
+            p1Hand.textContent = '🤜'; p2Hand.textContent = '🤛'; p1Choice = null; p2Choice = null;
+        }
+
+        function showToast(msg, type = 'info') {
+            const t = document.getElementById('toast');
+            t.textContent = msg;
+            t.style.backgroundColor = type === 'win' ? '#2563eb' : (type === 'lose' ? '#e11d48' : '#334155');
+            t.classList.remove('-translate-y-20', 'opacity-0');
+            setTimeout(() => t.classList.add('-translate-y-20', 'opacity-0'), 2000);
+        }
+    </script>
+</body>
+</html>
