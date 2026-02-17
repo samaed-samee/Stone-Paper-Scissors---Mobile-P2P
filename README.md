@@ -2,6 +2,9 @@
 
 A modern, mobile-first Rock-Paper-Scissors game with real-time peer-to-peer multiplayer battles.
 
+[🔴 Live Demo](https://samaed-samee.github.io/Stone-Paper-Scissors---Mobile-P2P/)
+
+
 [![GitHub](https://img.shields.io/badge/GitHub-Repository-black?logo=github)](https://github.com/samaed-samee)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![HTML5](https://img.shields.io/badge/HTML5-5-orange?logo=html5)](https://developer.mozilla.org/en-US/docs/Web/HTML)
